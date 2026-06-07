@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --coconut-brown: #5C3A1E;
+  --coconut-brown-dark: #3D2410;
+  --coconut-brown-light: #8B5E3C;
+  --coconut-cream: #FFF8F0;
+  --coconut-cream-dark: #F5E6D3;
+  --coconut-green: #2D6A4F;
+  --coconut-green-light: #52B788;
+  --coconut-green-pale: #D8F3DC;
+  --coconut-gold: #B8860B;
+  --coconut-gold-light: #DAA520;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: var(--coconut-cream);
+  color: var(--coconut-brown-dark);
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--coconut-cream-dark); }
+::-webkit-scrollbar-thumb { background: var(--coconut-brown-light); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--coconut-brown); }
+
+.wood-texture {
+  background-image:
+    repeating-linear-gradient(90deg, transparent, transparent 2px, rgba(92,58,30,0.03) 2px, rgba(92,58,30,0.03) 4px),
+    repeating-linear-gradient(0deg, transparent, transparent 8px, rgba(92,58,30,0.02) 8px, rgba(92,58,30,0.02) 9px);
+}
+
+.card-shadow {
+  box-shadow: 0 4px 24px rgba(92,58,30,0.12), 0 1px 4px rgba(92,58,30,0.08);
+}
+
+.card-shadow-lg {
+  box-shadow: 0 8px 32px rgba(92,58,30,0.18), 0 2px 8px rgba(92,58,30,0.1);
+}
