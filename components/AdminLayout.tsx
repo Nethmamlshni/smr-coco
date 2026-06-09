@@ -46,12 +46,13 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       </AnimatePresence>
 
       {/* Sidebar */}
-      <motion.aside
-        initial={false}
-        animate={{ x: sidebarOpen ? 0 : '-100%' }}
-        className="fixed left-0 top-0 bottom-0 w-64 z-30 lg:static lg:translate-x-0 lg:block"
-        style={{ background: 'linear-gradient(180deg, #3D2410 0%, #5C3A1E 60%, #2D6A4F 100%)' }}
-      >
+     <motion.aside
+  initial={false}
+  className="fixed left-0 top-0 bottom-0 w-64 z-30"
+  style={{
+    background: 'linear-gradient(180deg, #3D2410 0%, #5C3A1E 60%, #2D6A4F 100%)'
+  }}
+>
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="px-6 py-5 border-b border-white/10">
@@ -109,15 +110,11 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       </motion.aside>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 lg:ml-64">
         {/* Top bar */}
         <header className="sticky top-0 z-10 flex items-center gap-4 px-6 py-4 border-b border-[#E8D5C0] bg-white/90 backdrop-blur-sm">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="lg:hidden text-[#5C3A1E] hover:text-[#3D2410] transition-colors"
-          >
-            <Menu size={24} />
-          </button>
+          
+           
           <div className="flex-1">
             <p className="text-sm text-[#8B5E3C]">Welcome back, <span className="font-semibold text-[#5C3A1E]">{appUser?.full_name || appUser?.username}</span></p>
           </div>
