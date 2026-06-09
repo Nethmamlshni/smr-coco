@@ -26,23 +26,73 @@ interface ProductionData {
   coconuts: number;
   cages: number;
 }
-const groupDataByName = (records: CageRecord[], key: 'contractor_name' | 'employee_name') => {
-  const map = new Map<string, { name: string; count: number; cages: string[] }>();
+// Add this helper function outside the component
+const groupDataByName = (mergedRecords: any[], field: 'contractor_name' | 'employee_name') => {
+  const map = new Map<string, { name: string, cages: Set<string>, count: number }>();
 
-  records.forEach(r => {
-    const name = r[key] || 'Unknown';
-    const existing = map.get(name) || { name, count: 0, cages: [] };
-
-    existing.count += r.coconut_count;
-
-    if (!existing.cages.includes(r.cage_number.toString())) {
-      existing.cages.push(r.cage_number.toString());
+  mergedRecords.forEach(r => {
+    // If name is empty, categorize as 'Unassigned'
+    const name = r[field] && r[field].trim() !== "" ? r[field] : 'Unassigned';
+    
+    if (!map.has(name)) {
+      map.set(name, { name, cages: new Set<string>(), count: 0 });
     }
-
-    map.set(name, existing);
+    const entry = map.get(name)!;
+    entry.cages.add(r.cage_number.toString());
+    
+    // Add total from the merged object
+    entry.count += (r.total_coconut_count || 0);
   });
 
-  return Array.from(map.values());
+  return Array.from(map.values()).map(e => ({
+    ...e,
+    cages: Array.from(e.cages)
+  }));
+};
+const getMergedShiftRecords = (records: CageRecord[]) => {
+  const map = new Map<string, any>();
+
+  records.forEach((r) => {
+    // Grouping by Date, Shift, and Cage Number
+    const key = `${r.production_date}-${r.shift}-${r.cage_number}`;
+
+    if (!map.has(key)) {
+      map.set(key, {
+        supervisor_id: r.supervisor_id,
+        production_date: r.production_date,
+        shift: r.shift,
+        cage_number: r.cage_number,
+        employee_name: r.employee_name || '',
+        contractor_name: r.contractor_name || '',
+        coconut_type: r.coconut_type || '',
+        raw_weight: 0,
+        final_weight: 0,
+        full_filling_count: 0,
+        additional_filling_count: 0,
+      });
+    }
+
+    const row = map.get(key);
+
+    // If data is missing in one record, update from the other
+    if (r.employee_name) row.employee_name = r.employee_name;
+    if (r.contractor_name) row.contractor_name = r.contractor_name;
+    if (r.coconut_type) row.coconut_type = r.coconut_type;
+
+    // Split counts based on filling_type
+    if (r.filling_type === 'full') {
+      row.full_filling_count = r.coconut_count || 0;
+      row.raw_weight = r.raw_weight || 0;
+      row.final_weight = r.final_weight || 0;
+    } else if (r.filling_type === 'additional') {
+      row.additional_filling_count = r.coconut_count || 0;
+    }
+  });
+
+  return Array.from(map.values()).map(r => ({
+    ...r,
+    total_coconut_count: r.full_filling_count + r.additional_filling_count
+  }));
 };
 export default function AdminDashboard() {
   const { user, appUser, loading: authLoading } = useAuth();
@@ -119,349 +169,123 @@ export default function AdminDashboard() {
       setLoading(false);
     }
   };
+const groupBySupervisor = (records: CageRecord[], supervisors: Record<string, AppUser>) => {
+  const map = new Map<string, { name: string, count: number }>();
 
+  records.forEach(r => {
+    const supervisorName = supervisors[r.supervisor_id]?.full_name || 'Unassigned';
+    if (!map.has(supervisorName)) {
+      map.set(supervisorName, { name: supervisorName, count: 0 });
+    }
+    map.get(supervisorName)!.count += (r.coconut_count || 0);
+  });
+
+  return Array.from(map.values());
+};
 const exportToExcel = async () => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('Production Report');
 
-  // ==========================
-  // COLORS
-  // ==========================
   const brown = '5C3A1E';
   const green = '2D6A4F';
-  const cream = 'FFF0E0';
 
-  const headerStyle = {
-    font: {
-      bold: true,
-      color: { argb: 'FFFFFF' },
-      size: 11,
-    },
-    fill: {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: brown },
-    },
-    alignment: {
-      horizontal: 'center' as const,
-      vertical: 'middle' as const,
-    },
-    border: {
-      top: { style: 'thin' as const },
-      left: { style: 'thin' as const },
-      bottom: { style: 'thin' as const },
-      right: { style: 'thin' as const },
-    },
-  };
-
-  // ==========================
-  // REPORT TITLE
-  // ==========================
-
-  worksheet.mergeCells('A1:J2');
-
+  // 1. Title
+  worksheet.mergeCells('A1:L2');
   const title = worksheet.getCell('A1');
-
   title.value = `SMR CNO Section Production Report - ${selectedDate}`;
+  title.font = { size: 18, bold: true, color: { argb: green } };
+  title.alignment = { horizontal: 'center', vertical: 'middle' };
 
-  title.font = {
-    size: 18,
-    bold: true,
-    color: { argb: green },
-  };
+  let row = 4;
 
-  title.alignment = {
-    horizontal: 'center',
-    vertical: 'middle',
-  };
+  // Helper for simple tables (Employee, Contractor, Supervisor, Full/Add Details)
+  const createSimpleTable = (titleText: string, headers: string[], data: any[]) => {
+    worksheet.mergeCells(`A${row}:C${row}`);
+    const titleCell = worksheet.getCell(`A${row}`);
+    titleCell.value = titleText;
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
+    titleCell.font = { bold: true, color: { argb: 'FFFFFF' } };
+    row++;
 
-  let row = 5;
+    worksheet.getRow(row).values = headers;
+    worksheet.getRow(row).eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: brown } };
+      cell.font = { bold: true, color: { argb: 'FFFFFF' } };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    row++;
 
-  // ==========================
-  // TABLE CREATOR
-  // ==========================
-
- const createTable = (
-  titleText: string,
-  data: any[]
-) => {
-  if (!data.length) return;
-
-  // Section Title
-  worksheet.mergeCells(`A${row}:J${row}`);
-
-  const titleCell = worksheet.getCell(`A${row}`);
-
-  titleCell.value = titleText;
-
-  titleCell.font = {
-    bold: true,
-    size: 14,
-    color: { argb: 'FFFFFF' },
-  };
-
-  titleCell.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: green },
-  };
-
-  titleCell.alignment = {
-    horizontal: 'center',
-  };
-
-  row++;
-
-  // Headers
-  const headers = Object.keys(data[0]);
-
-  const headerRow = worksheet.getRow(row);
-
-  headers.forEach((h, i) => {
-    const cell = headerRow.getCell(i + 1);
-
-    cell.value = h;
-
-    cell.font = {
-      bold: true,
-      color: { argb: 'FFFFFF' },
-    };
-
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: brown },
-    };
-
-    cell.alignment = {
-      horizontal: 'center',
-    };
-
-    cell.border = {
-      top: { style: 'thin' },
-      left: { style: 'thin' },
-      right: { style: 'thin' },
-      bottom: { style: 'thin' },
-    };
-  });
-
-  row++;
-
-  // Data Rows
-  data.forEach(item => {
-    const values = Object.values(item);
-
-    const dataRow = worksheet.addRow(values);
-
-    dataRow.eachCell(cell => {
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        right: { style: 'thin' },
-        bottom: { style: 'thin' },
-      };
+    data.forEach(item => {
+      const r = worksheet.addRow(Object.values(item));
+      r.eachCell(c => c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } });
+      row++;
     });
 
+    // Total Row
+    const total = data.reduce((sum, item) => sum + (Number(Object.values(item).pop()) || 0), 0);
+    const totalRow = worksheet.addRow(['', 'TOTAL', total]);
+    totalRow.getCell(2).font = { bold: true };
+    totalRow.getCell(3).font = { bold: true, color: { argb: green } };
+    row += 3;
+  };
+
+  // Helper for Shift Summary (Detailed)
+  const createShiftTable = (titleText: string, records: any[]) => {
+    worksheet.mergeCells(`A${row}:K${row}`);
+    const titleCell = worksheet.getCell(`A${row}`);
+    titleCell.value = titleText;
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: green } };
+    titleCell.font = { bold: true, color: { argb: 'FFFFFF' } };
     row++;
-  });
 
-  // =====================
-  // TOTAL ROW
-  // =====================
+    const headers = ['Supervisor', 'Date', 'Cage', 'Employee', 'Contractor', 'Type', 'Raw Wt', 'Final Wt', 'Full Filling', 'Additional', 'Total Count'];
+    worksheet.getRow(row).values = headers;
+    worksheet.getRow(row).eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: brown } };
+      cell.font = { bold: true, color: { argb: 'FFFFFF' } };
+      cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    row++;
 
-  const totalRow = worksheet.addRow([]);
+    // Row-by-row data
+    records.forEach(r => {
+      const dr = worksheet.addRow([
+        supervisors[r.supervisor_id]?.full_name || '-',
+        r.production_date, r.cage_number, r.employee_name || '-', r.contractor_name || '-',
+        r.coconut_type || '-', r.raw_weight, r.final_weight,
+        r.full_filling_count, r.additional_filling_count, r.total_coconut_count
+      ]);
+      dr.eachCell(c => c.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } });
+      row++;
+    });
 
-  totalRow.getCell(1).value = 'TOTAL';
-
-  totalRow.getCell(1).font = {
-    bold: true,
-    color: { argb: 'FFFFFF' },
+    // --- MEHENA TOTAL ROW EKA ADD KARANNA ---
+    const totalCount = records.reduce((sum, r) => sum + (r.total_coconut_count || 0), 0);
+    const totalRow = worksheet.addRow([
+        '', '', '', '', '', '', '', '', '', 'TOTAL:', totalCount
+    ]);
+    
+    // Total row eke style eka
+    totalRow.eachCell((cell, colNumber) => {
+        cell.font = { bold: true, color: { argb: green } };
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    row += 3; // Table dekak athara ida
   };
-
-  totalRow.getCell(1).fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: green },
-  };
-
-  const countColumnIndex = headers.findIndex(
-    h =>
-      h === 'Count' ||
-      h === 'TotalCoconuts' ||
-      h === 'Total Coconut Count'
-  );
-
-  if (countColumnIndex >= 0) {
-    const total = data.reduce(
-      (sum, item) =>
-        sum +
-        Number(
-          Object.values(item)[countColumnIndex]
-        ),
-      0
-    );
-
-    const totalCell =
-      totalRow.getCell(
-        countColumnIndex + 1
-      );
-
-    totalCell.value = total;
-
-    totalCell.font = {
-      bold: true,
-      color: { argb: 'FFFFFF' },
-    };
-
-    totalCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: green },
-    };
-  }
-
-  totalRow.eachCell(cell => {
-    cell.border = {
-      top: { style: 'thin' },
-      left: { style: 'thin' },
-      right: { style: 'thin' },
-      bottom: { style: 'thin' },
-    };
-  });
-
-  row += 4;
-};
-
-  // ==========================
-  // FULL FILLING
-  // ==========================
-
-  const fullData = cageRecords
-    .filter(r => r.filling_type === 'full')
-    .map(r => ({
-      Date: r.production_date,
-      Shift: r.shift,
-      Cage: r.cage_number,
-      Employee: r.employee_name,
-      Contractor: r.contractor_name,
-      Type: r.coconut_type,
-      RawWeight: r.raw_weight,
-      FinalWeight: r.final_weight,
-      Count: r.coconut_count,
-    }));
-
-  createTable(
-    'FULL FILLING REPORT',
-    fullData
-  );
-
-  // ==========================
-  // ADDITIONAL FILLING
-  // ==========================
-
-  const addData = cageRecords
-    .filter(
-      r =>
-        r.filling_type ===
-        'additional'
-    )
-    .map(r => ({
-      Date: r.production_date,
-      Shift: r.shift,
-      Cage: r.cage_number,
-      Employee: r.employee_name,
-      Contractor: r.contractor_name,
-      Type: r.coconut_type,
-      RawWeight: r.raw_weight,
-      FinalWeight: r.final_weight,
-      Count: r.coconut_count,
-    }));
-
-  createTable(
-    'ADDITIONAL FILLING REPORT',
-    addData
-  );
-
-  // ==========================
-  // EMPLOYEE REPORT
-  // ==========================
-
-  const employeeMap = new Map();
-
-  cageRecords.forEach(r => {
-    const emp =
-      r.employee_name || 'N/A';
-
-    employeeMap.set(
-      emp,
-      (employeeMap.get(emp) || 0) +
-        r.coconut_count
-    );
-  });
-
-  const employeeData = Array.from(
-    employeeMap.entries()
-  ).map(([name, total]) => ({
-    Employee: name,
-    TotalCoconuts: total,
-  }));
-
-  createTable(
-    'EMPLOYEE REPORT',
-    employeeData
-  );
-
-  // ==========================
-  // CONTRACTOR REPORT
-  // ==========================
-
-  const contractorMap = new Map();
-
-  cageRecords.forEach(r => {
-    const contractor =
-      r.contractor_name || 'N/A';
-
-    contractorMap.set(
-      contractor,
-      (contractorMap.get(contractor) ||
-        0) + r.coconut_count
-    );
-  });
-
-  const contractorData =
-    Array.from(
-      contractorMap.entries()
-    ).map(([name, total]) => ({
-      Contractor: name,
-      TotalCoconuts: total,
-    }));
-
-  createTable(
-    'CONTRACTOR REPORT',
-    contractorData
-  );
+  // GENERATING 7 TABLES
+  createShiftTable('DAY SHIFT SUMMARY', getMergedShiftRecords(dayRecords));
+  createShiftTable('NIGHT SHIFT SUMMARY', getMergedShiftRecords(nightRecords));
   
-  // ==========================
-  // COLUMN WIDTHS
-  // ==========================
+  createSimpleTable('EMPLOYEE SUMMARY', ['Name', 'Cages', 'Total Coconuts'], groupDataByName(getMergedShiftRecords(cageRecords), 'employee_name').map(e => ({ Name: e.name, Cages: e.cages.join(','), Total: e.count })));
+  createSimpleTable('CONTRACTOR SUMMARY', ['Name', 'Cages', 'Total Coconuts'], groupDataByName(getMergedShiftRecords(cageRecords), 'contractor_name').map(c => ({ Name: c.name, Cages: c.cages.join(','), Total: c.count })));
+  createSimpleTable('FULL FILLING DETAILS', ['Cage No', 'Count'], cageRecords.filter(r => r.filling_type === 'full').map(r => ({ Cage: r.cage_number, Count: r.coconut_count })));
+  createSimpleTable('ADDITIONAL FILLING DETAILS', ['Cage No', 'Count'], cageRecords.filter(r => r.filling_type === 'additional').map(r => ({ Cage: r.cage_number, Count: r.coconut_count })));
+  createSimpleTable('SUPERVISOR SUMMARY', ['Supervisor Name', 'Total Coconuts'], groupBySupervisor(cageRecords, supervisors).map(s => ({ Name: s.name, Total: s.count })));
 
-  worksheet.columns.forEach(col => {
-    col.width = 20;
-  });
-
-  // ==========================
-  // DOWNLOAD
-  // ==========================
-
-  const buffer =
-    await workbook.xlsx.writeBuffer();
-
-  saveAs(
-    new Blob([buffer]),
-    `SMR_${selectedDate}.xlsx`
-  );
+  worksheet.columns.forEach(col => col.width = 15);
+  const buffer = await workbook.xlsx.writeBuffer();
+  saveAs(new Blob([buffer]), `SMR_Full_Report_${selectedDate}.xlsx`);
 };
-
   // Prepare table data
   const dayRecords = cageRecords.filter(r => r.shift === 'day');
   const nightRecords = cageRecords.filter(r => r.shift === 'night');
@@ -590,77 +414,76 @@ const exportToExcel = async () => {
           <div className="p-5 space-y-6 overflow-x-auto">
             {activeTab === 'shift' && (
               <>
-<ShiftTable 
-  title="Day Shift - Full Filling" 
-  records={getGroupedRecords(dayRecords.filter(r => r.filling_type === 'full'))} 
-  supervisors={supervisors} 
-/>            
-<ShiftTable 
-  title="Day Shift - Additional Filling" 
-  records={getGroupedRecords(dayRecords.filter(r => r.filling_type === 'additional'))} 
-  supervisors={supervisors} 
+<ShiftTable
+  title="Day Shift"
+  records={getMergedShiftRecords(dayRecords)}
+  supervisors={supervisors}
 />
-<ShiftTable 
-  title="Night Shift - Full Filling" 
-  records={getGroupedRecords(nightRecords.filter(r => r.filling_type === 'full'))} 
-  supervisors={supervisors} 
+
+<ShiftTable
+  title="Night Shift"
+  records={getMergedShiftRecords(nightRecords)}
+  supervisors={supervisors}
 />
-<ShiftTable 
-  title="Night Shift - Additional Filling" 
-  records={getGroupedRecords(nightRecords.filter(r => r.filling_type === 'additional'))} 
-  supervisors={supervisors} 
-/>  
               </>
             )}
             {activeTab === 'contractor' && (
-              <>
-                <ContractorTable title="Day Shift" records={dayRecords} />
-                <ContractorTable title="Night Shift" records={nightRecords} />
-              </>
-            )}
-            {activeTab === 'employee' && (
-              <>
-                <EmployeeTable title="Day Shift" records={dayRecords} />
-                <EmployeeTable title="Night Shift" records={nightRecords} />
-              </>
-            )}
-          </div>
+    <>
+      <ContractorTable 
+        title="Day Shift" 
+        records={getMergedShiftRecords(dayRecords)} // Mehema pass karanna
+      />
+      <ContractorTable 
+        title="Night Shift" 
+        records={getMergedShiftRecords(nightRecords)} // Mehema pass karanna
+      />
+    </>
+  )}
+  {activeTab === 'employee' && (
+    <>
+      <EmployeeTable 
+        title="Day Shift" 
+        records={getMergedShiftRecords(dayRecords)} // Mehema pass karanna
+      />
+      <EmployeeTable 
+        title="Night Shift" 
+        records={getMergedShiftRecords(nightRecords)} // Mehema pass karanna
+      />
+    </>
+  )}
+</div>
         </div>
       </div>
     </AdminLayout>
   );
 }
 
-function ShiftTable({ title, records, supervisors }: { title: string; records: CageRecord[]; supervisors: Record<string, AppUser> }) {
-  if (records.length === 0) return (
-    <div>
-      <h4 className="font-semibold text-[#5C3A1E] text-sm mb-2">{title}</h4>
-      <p className="text-[#8B5E3C] text-sm italic">No records</p>
-    </div>
-  );
+function ShiftTable({ title, records, supervisors }: { title: string; records: any[]; supervisors: Record<string, AppUser> }) {
   return (
-    <div>
+    <div className="mb-8">
       <h4 className="font-semibold text-[#5C3A1E] text-sm mb-3">{title}</h4>
-      <table className="w-full text-sm border-collapse min-w-[700px]">
+      <table className="w-full text-sm border-collapse min-w-[900px]">
         <thead>
           <tr className="bg-[#FFF0E0]">
-            {['Supervisor', 'Date', 'Cage No', 'Employee', 'Contractor', 'Type', 'Raw Wt', 'Final Wt', 'Count'].map(h => (
-              <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[#5C3A1E] uppercase tracking-wide border border-[#E8D5C0]">{h}</th>
+            {['Supervisor', 'Date', 'Cage No', 'Employee', 'Contractor', 'Type', 'Raw Wt', 'Final Wt', 'Full Filling', 'Additional', 'Total Count'].map(h => (
+              <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[#5C3A1E] uppercase border border-[#E8D5C0]">{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {records.map(r => (
-            <tr key={r.id} className="hover:bg-[#FFF8F0] border-b border-[#F0E0D0]">
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{supervisors[r.supervisor_id]?.full_name || '-'}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.production_date}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410] text-center font-bold">{r.cage_number}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.employee_name}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.contractor_name}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0]"><span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${r.coconut_type === 'Red' ? 'bg-red-100 text-red-700' : r.coconut_type === 'Black' ? 'bg-gray-100 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>{r.coconut_type || '-'}</span></td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.raw_weight ? `${r.raw_weight} kg` : '-'}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410] font-semibold">{r.final_weight ? `${r.final_weight} kg` : '-'}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#2D6A4F] font-bold">{r.coconut_count.toLocaleString()}</td>
+          {records.map((r, i) => (
+            <tr key={i} className="hover:bg-[#FFF8F0] border-b border-[#F0E0D0]">
+              <td className="px-3 py-2 border border-[#E8D5C0]">{supervisors[r.supervisor_id]?.full_name || '-'}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.production_date}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] font-bold text-center">{r.cage_number}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.employee_name || '-'}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.contractor_name || '-'}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.coconut_type || '-'}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.raw_weight} kg</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.final_weight} kg</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] text-center">{r.full_filling_count}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] text-center">{r.additional_filling_count}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] font-bold text-[#2D6A4F]">{r.total_coconut_count.toLocaleString()}</td>
             </tr>
           ))}
         </tbody>
@@ -672,32 +495,25 @@ function ShiftTable({ title, records, supervisors }: { title: string; records: C
 function ContractorTable({ title, records }: { title: string; records: CageRecord[] }) {
   const groupedData = groupDataByName(records, 'contractor_name');
 
-  if (groupedData.length === 0) return (
-    <div>
-      <h4 className="font-semibold text-[#5C3A1E] text-sm mb-2">{title}</h4>
-      <p className="text-[#8B5E3C] text-sm italic">No records</p>
-    </div>
-  );
-
   return (
-    <div>
+    <div className="mb-6">
       <h4 className="font-semibold text-[#5C3A1E] text-sm mb-3">{title}</h4>
       <table className="w-full text-sm border-collapse min-w-[400px]">
         <thead>
           <tr className="bg-[#FFF0E0]">
-            {['Contractor Name', 'Cages', 'Total Coconuts'].map(h => (
-              <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[#5C3A1E] uppercase tracking-wide border border-[#E8D5C0]">{h}</th>
-            ))}
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Contractor Name</th>
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Cages</th>
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Total Coconuts</th>
           </tr>
         </thead>
         <tbody>
-          {groupedData.map((r, i) => (
-            <tr key={i} className="hover:bg-[#FFF8F0] border-b border-[#F0E0D0]">
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410] font-semibold">{r.name}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.cages.join(', ')}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#2D6A4F] font-bold">{r.count.toLocaleString()}</td>
+          {groupedData.length > 0 ? groupedData.map((r, i) => (
+            <tr key={i} className="border-b border-[#F0E0D0]">
+              <td className="px-3 py-2 border border-[#E8D5C0] font-semibold">{r.name}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.cages.join(', ')}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] font-bold text-[#2D6A4F]">{r.count.toLocaleString()}</td>
             </tr>
-          ))}
+          )) : <tr><td colSpan={3} className="p-4 text-center text-gray-500">No records found</td></tr>}
         </tbody>
       </table>
     </div>
@@ -707,32 +523,25 @@ function ContractorTable({ title, records }: { title: string; records: CageRecor
 function EmployeeTable({ title, records }: { title: string; records: CageRecord[] }) {
   const groupedData = groupDataByName(records, 'employee_name');
 
-  if (groupedData.length === 0) return (
-    <div>
-      <h4 className="font-semibold text-[#5C3A1E] text-sm mb-2">{title}</h4>
-      <p className="text-[#8B5E3C] text-sm italic">No records</p>
-    </div>
-  );
-
   return (
-    <div>
+    <div className="mb-6">
       <h4 className="font-semibold text-[#5C3A1E] text-sm mb-3">{title}</h4>
       <table className="w-full text-sm border-collapse min-w-[300px]">
         <thead>
           <tr className="bg-[#FFF0E0]">
-            {['Employee Name', 'Cages', 'Total Coconuts'].map(h => (
-              <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-[#5C3A1E] uppercase tracking-wide border border-[#E8D5C0]">{h}</th>
-            ))}
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Employee Name</th>
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Cages</th>
+            <th className="px-3 py-2 text-left text-xs text-[#5C3A1E] border border-[#E8D5C0]">Total Coconuts</th>
           </tr>
         </thead>
         <tbody>
-          {groupedData.map((r, i) => (
-            <tr key={i} className="hover:bg-[#FFF8F0] border-b border-[#F0E0D0]">
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410] font-semibold">{r.name}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#3D2410]">{r.cages.join(', ')}</td>
-              <td className="px-3 py-2 border border-[#E8D5C0] text-[#2D6A4F] font-bold">{r.count.toLocaleString()}</td>
+          {groupedData.length > 0 ? groupedData.map((r, i) => (
+            <tr key={i} className="border-b border-[#F0E0D0]">
+              <td className="px-3 py-2 border border-[#E8D5C0] font-semibold">{r.name}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0]">{r.cages.join(', ')}</td>
+              <td className="px-3 py-2 border border-[#E8D5C0] font-bold text-[#2D6A4F]">{r.count.toLocaleString()}</td>
             </tr>
-          ))}
+          )) : <tr><td colSpan={3} className="p-4 text-center text-gray-500">No records found</td></tr>}
         </tbody>
       </table>
     </div>
