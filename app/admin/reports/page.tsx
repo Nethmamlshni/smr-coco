@@ -66,7 +66,7 @@ export default function AdminReportsPage() {
     setRecords(records);
     setLoading(false);
   };
-
+  
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
     const exportData = records.map(r => ({
